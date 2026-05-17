@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ポジティブコアシート</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:-apple-system,BlinkMacSystemFont,'Hiragino Sans','Yu Gothic',sans-serif;background:#f1f0ee;color:#1a1a1a;}
+input,select,button,textarea{font-family:inherit;font-size:14px;}
+button{cursor:pointer;}
+::-webkit-scrollbar{width:4px;}
+::-webkit-scrollbar-thumb{background:#ccc;border-radius:2px;}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes pulse{0%,100%{opacity:.3}50%{opacity:1}}
+#app{min-height:100vh;display:flex;flex-direction:column;}
+.inp{width:100%;padding:9px 12px;border:1px solid #d4d4d4;border-radius:8px;background:#fff;color:#1a1a1a;}
+.inp:focus{outline:2px solid #999;outline-offset:-1px;}
+</style>
+</head>
+<body>
+<div id="app"><div style="padding:20px;color:#999;">読み込み中...</div></div>
+<script>
+var MBTIS=['INTJ','INTP','ENTJ','ENTP','INFJ','INFP','ENFJ','ENFP','ISTJ','ISFJ','ESTJ','ESFJ','ISTP','ISFP','ESTP','ESFP'];
+var MD={INTJ:'戦略家・独立思考',INTP:'論理学者・分析的',ENTJ:'指揮官・目標志向',ENTP:'討論者・革新的',INFJ:'提唱者・共感力',INFP:'仲介者・価値観重視',ENFJ:'主人公・育成志向',ENFP:'広報運動家・情熱的',ISTJ:'管理者・責任感',ISFJ:'擁護者・献身的',ESTJ:'幹部・組織力',ESFJ:'領事官・協調性',ISTP:'巨匠・実践的',ISFP:'冒険家・感受性',ESTP:'起業家・行動力',ESFP:'エンターテイナー・社交的'};
+var ROLES=['獣医師','動物看護師','受付・事務','トリマー','その他'];
+var pg='home',list=[],cur=null,msgs=[],busy=false;
+var F={name:'',role:'',mbti:'',v:['','','','',''],sf:['','','','','']};
+var D={_id:'',em:'',story:'',chal:'',exp6m:'',exp1y:'',crole:'',skills:'',stance:'',prev:'',memo:''};
+var apiKey=localStorage.getItem('pc-apikey')||'';
+
+function esc(t){return String(t||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function G(id){return document.getElementById(id);}
+function td(){return new Date().toLocaleDateString('ja-JP',{year:'numeric',month:'2-digit',day:'2-digit'}).replace(/\//g,'-');}
+function chip(t){return '<span style="display:inline-block;padding:3px 9px;background:#f1f0ee;border:1px solid #d4d4d4;border-radius:20px;font-size:12px;color:#555;margin:2px 2px 0 0;">'+esc(t)+'</span>';}
+function sg(k){try{var v=localStorage.getItem(k);return v?JSON.parse(v):null;}catch(e){return null;}}
+function ss(k,v){try{if(v===null){localStorage.removeItem(k);}else{localStorage.setItem(k,JSON.stringify(v));}}catch(e){}}
+function persist(){
+  if(!cur)return;
+  cur.messages=msgs;cur.updated=td();ss('pc-'+cur.id,cur);
+  var e={id:cur.id,name:cur.name,role:cur.role,pct:cur.sheet.completion_rate||0,core:cur.sheet.positive_core||''};
+  var i=list.findIndex(function(s){return s.id===cur.id;});
+  if(i>=0)list[i]=e;else list.push(e);
+  ss('pc-idx',list);
+}
+function saveDraft(){ss('pc-draft',D);}
+function loadDraft(){var d=sg('pc-draft');if(d&&d._id===cur.id)D=d;}
+
+function showApiModal(cb){
+  var ov=document.createElement('div');
+  ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:999;';
+  ov.innerHTML='<div style="background:#fff;border-radius:14px;padding:28px;width:90%;max-width:420px;">'
+    +'<h2 style="font-size:16px;font-weight:500;margin-bottom:8px;">APIキーを設定</h2>'
+    +'<p style="font-size:13px;color:#999;margin-bottom:14px;line-height:1.7;">console.anthropic.com でAPIキーを取得してください（sk-ant-...）</p>'
+    +'<input id="api-inp" type="password" placeholder="sk-ant-..." class="inp" style="margin-bottom:10px;">'
+    +'<div id="api-err" style="color:#c00;font-size:12px;margin-bottom:10px;display:none;"></div>'
+    +'<div style="display:flex;gap:10px;">'
+    +'<button id="api-cancel" style="flex:1;padding:10px;border:1px solid #d4d4d4;border-radius:8px;background:transparent;color:#555;">キャンセル</button>'
+    +'<button id="api-save" style="flex:1;padding:10px;background:#1a1a1a;color:#fff;border:none;border-radius:8px;font-weight:500;">保存して続ける</button>'
+    +'</div></div>';
+  document.body.appendChild(ov);
+  setTimeout(function(){var i=G('api-inp');if(i)i.focus();},50);
+  G('api-cancel').onclick=function(){document.body.removeChild(ov);};
+  G('api-save').onclick=function(){
+    var v=G('api-inp').value.trim();
+    if(!v){G('api-err').textContent='APIキーを入力してください';G('api-err').style.display='block';return;}
+    apiKey=v;localStorage.setItem('pc-apikey',v);
+    document.body.removeChild(ov);
+    if(cb)cb();
+  };
+}
+function needKey(cb){if(apiKey){cb();return;}showApiModal(cb);}
+
+function tbar(l,r){return '<div style="display:flex;align-items:center;justify-content:space-between;padding:11px 20px;background:#fff;border-bottom:1px solid #e8e8e8;position:sticky;top:0;z-index:10;">'+l+r+'</div>';}
+function gBtn(id,t){return '<button id="'+id+'" style="font-size:13px;color:#555;background:none;border:none;padding:4px 0;">'+t+'</button>';}
+function sBtn(id,t){return '<button id="'+id+'" style="padding:7px 16px;background:#1a1a1a;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:500;">'+t+'</button>';}
+function oBtn(id,t){return '<button id="'+id+'" style="padding:7px 14px;border:1px solid #d4d4d4;border-radius:8px;background:#fff;color:#555;font-size:13px;">'+t+'</button>';}
+function pb(lbl,content,wide,hi){return '<div style="background:#fff;border:'+(hi?'1.5px solid #555':'1px solid #e8e8e8')+';border-radius:10px;padding:14px 16px;'+(wide?'grid-column:span 2;':'')+'">'+'<div style="font-size:10px;font-weight:500;letter-spacing:.5px;color:#999;margin-bottom:6px;">'+lbl+'</div>'+'<div style="font-size:13px;color:'+(content?'#1a1a1a':'#bbb')+';line-height:1.6;">'+(content||'—')+'</div></div>';}
+
+function render(){
+  var el=G('app');
+  if(!el){console.error('No #app element');return;}
+  try{
+    if(pg==='home')rHome(el);
+    else if(pg==='add1')rAdd1(el);
+    else if(pg==='add2')rAdd2(el);
+    else if(pg==='page')rPage(el);
+    else if(pg==='input')rInput(el);
+    else if(pg==='busy')rBusy(el);
+    else if(pg==='chat')rChat(el);
+    else rHome(el);
+  }catch(err){
+    console.error('Render error:',err);
+    el.innerHTML='<div style="padding:30px;"><div style="color:#c00;font-weight:500;margin-bottom:8px;">表示エラー</div><div style="color:#555;font-size:13px;">'+esc(err.message)+'</div></div>';
+  }
+}
+
+function rHome(el){
+  var keyBtn=apiKey
+    ?'<button id="h-key" style="padding:6px 12px;border:1px solid #15803d;border-radius:8px;background:transparent;color:#15803d;font-size:12px;">🔑 APIキー設定済み</button>'
+    :'<button id="h-key" style="padding:6px 12px;border:1px solid #e55;border-radius:8px;background:#fff8f8;color:#c00;font-size:12px;">⚠️ APIキーを設定</button>';
+  var cards='';
+  if(list.length===0){
+    cards='<div style="text-align:center;padding:60px 20px;border:1.5px dashed #d4d4d4;border-radius:14px;"><div style="font-size:32px;margin-bottom:10px;">🐾</div><div style="font-size:14px;color:#555;margin-bottom:4px;">育成対象のスタッフを追加してください</div></div>';
+  }else{
+    cards='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;">';
+    for(var i=0;i<list.length;i++){
+      var s=list[i];
+      cards+='<div style="position:relative;"><div class="sc" data-sid="'+s.id+'" style="background:#fff;border:1px solid #e8e8e8;border-radius:12px;padding:18px;cursor:pointer;transition:border-color .15s;">'
+        +'<div style="font-size:11px;color:#999;margin-bottom:2px;">'+esc(s.role||'')+'</div>'
+        +'<div style="font-size:16px;font-weight:500;margin-bottom:10px;">'+esc(s.name)+'</div>'
+        +(s.core?'<div style="font-size:12px;color:#555;background:#f7f7f5;padding:6px 9px;border-radius:6px;margin-bottom:12px;line-height:1.5;">"'+esc(s.core)+'"</div>':'<div style="font-size:12px;color:#bbb;margin-bottom:12px;">未作成</div>')
+        +'<div style="display:flex;align-items:center;gap:6px;"><div style="flex:1;height:3px;background:#e8e8e8;border-radius:2px;overflow:hidden;"><div style="height:100%;width:'+(s.pct||0)+'%;background:'+(s.pct>=70?'#15803d':'#1a1a1a')+';border-radius:2px;"></div></div><span style="font-size:11px;color:#999;">'+(s.pct||0)+'%</span></div>'
+        +'</div>'
+        +'<button class="del-btn" data-sid="'+s.id+'" data-name="'+esc(s.name)+'" style="position:absolute;top:8px;right:8px;width:22px;height:22px;border-radius:50%;background:#fff;border:1px solid #e8e8e8;color:#bbb;font-size:14px;line-height:1;display:flex;align-items:center;justify-content:center;cursor:pointer;padding:0;" title="削除">×</button>'
+        +'</div>';
+    }
+    cards+='</div>';
+  }
+  el.innerHTML='<div style="max-width:720px;margin:0 auto;padding:36px 24px;">'
+    +'<div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:8px;">'
+    +'<div><div style="font-size:11px;letter-spacing:2px;color:#999;font-weight:500;margin-bottom:6px;">POSITIVE CORE</div>'
+    +'<h1 style="font-size:24px;font-weight:500;">スタッフ育成シート</h1>'
+    +'<p style="font-size:13px;color:#999;margin-top:3px;">MBTI・価値観・面談メモをAIで統合</p></div>'
+    +'<div style="display:flex;gap:8px;align-items:center;">'+keyBtn+sBtn('h-add','+ スタッフを追加')+'</div>'
+    +'</div>'
+    +'<div style="height:1px;background:#e8e8e8;margin:20px 0 24px;"></div>'
+    +cards+'</div>';
+  G('h-key').onclick=function(){showApiModal(function(){render();});};
+  G('h-add').onclick=function(){F={name:'',role:'',mbti:'',v:['','','','',''],sf:['','','','','']};pg='add1';render();};
+  var dels=el.querySelectorAll('.del-btn');
+  for(var i=0;i<dels.length;i++){
+    (function(btn){
+      btn.onmouseenter=function(){btn.style.background='#fee2e2';btn.style.borderColor='#e55';btn.style.color='#c00';};
+      btn.onmouseleave=function(){btn.style.background='#fff';btn.style.borderColor='#e8e8e8';btn.style.color='#bbb';};
+      btn.onclick=function(e){
+        e.stopPropagation();
+        var name=btn.dataset.name,sid=btn.dataset.sid;
+        if(!confirm(name+' のシートを削除しますか？\nこの操作は元に戻せません。')){return;}
+        list=list.filter(function(s){return s.id!==sid;});
+        ss('pc-idx',list);
+        try{localStorage.removeItem('pc-'+sid);}catch(e){}
+        render();
+      };
+    })(dels[i]);
+  }
+  var scs=el.querySelectorAll('.sc');
+  for(var i=0;i<scs.length;i++){
+    (function(c){
+      c.onmouseenter=function(){c.style.borderColor='#999';};
+      c.onmouseleave=function(){c.style.borderColor='#e8e8e8';};
+      c.onclick=function(){var d=sg('pc-'+c.dataset.sid);cur=d||null;msgs=cur?cur.messages||[]:[];pg='page';render();};
+    })(scs[i]);
+  }
+}
+
+function rAdd1(el){
+  var ro='<option value="">選択してください</option>';for(var i=0;i<ROLES.length;i++)ro+='<option'+(F.role===ROLES[i]?' selected':'')+'>'+ROLES[i]+'</option>';
+  var mo='<option value="">選択してください</option>';for(var i=0;i<MBTIS.length;i++){var t=MBTIS[i];mo+='<option value="'+t+'"'+(F.mbti===t?' selected':'')+'>'+t+' — '+MD[t]+'</option>';}
+  el.innerHTML='<div style="display:flex;align-items:center;justify-content:center;padding:40px 20px;min-height:100vh;">'
+    +'<div style="background:#fff;border-radius:14px;padding:28px;width:100%;max-width:400px;border:1px solid #e8e8e8;">'
+    +'<div style="display:flex;justify-content:space-between;margin-bottom:18px;"><h2 style="font-size:16px;font-weight:500;">スタッフを追加</h2><span style="font-size:12px;color:#999;">1 / 2</span></div>'
+    +'<div style="display:flex;flex-direction:column;gap:12px;margin-bottom:20px;">'
+    +'<div><label style="font-size:12px;font-weight:500;color:#555;display:block;margin-bottom:5px;">スタッフ名 *</label><input id="a1n" class="inp" value="'+esc(F.name)+'" placeholder="例：田中 花子"></div>'
+    +'<div><label style="font-size:12px;font-weight:500;color:#555;display:block;margin-bottom:5px;">役職</label><select id="a1r" class="inp">'+ro+'</select></div>'
+    +'<div><label style="font-size:12px;font-weight:500;color:#555;display:block;margin-bottom:5px;">MBTIタイプ *</label><select id="a1m" class="inp">'+mo+'</select></div>'
+    +'</div>'
+    +'<div style="display:flex;gap:10px;">'
+    +'<button id="a1b" style="flex:1;padding:10px;border:1px solid #d4d4d4;border-radius:8px;background:#fff;color:#555;">キャンセル</button>'
+    +'<button id="a1ok" style="flex:1;padding:10px;background:#1a1a1a;color:#fff;border:none;border-radius:8px;font-weight:500;">次へ →</button>'
+    +'</div></div></div>';
+  G('a1n').oninput=function(e){F.name=e.target.value;};G('a1r').onchange=function(e){F.role=e.target.value;};G('a1m').onchange=function(e){F.mbti=e.target.value;};
+  setTimeout(function(){if(G('a1n'))G('a1n').focus();},50);
+  G('a1b').onclick=function(){pg='home';render();};
+  G('a1ok').onclick=function(){if(!F.name.trim()){alert('スタッフ名を入力してください');return;}if(!F.mbti){alert('MBTIタイプを選択してください');return;}pg='add2';render();};
+}
+
+function rAdd2(el){
+  var vi='',si='';
+  for(var i=0;i<5;i++){
+    vi+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;"><span style="font-size:12px;color:#999;width:16px;text-align:right;">'+(i+1)+'</span><input class="vi inp" data-i="'+i+'" value="'+esc(F.v[i])+'" placeholder="例：誠実さ" style="flex:1;padding:8px 10px;"></div>';
+    si+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;"><span style="font-size:12px;color:#999;width:16px;text-align:right;">'+(i+1)+'</span><input class="si inp" data-i="'+i+'" value="'+esc(F.sf[i])+'" placeholder="例：共感性（任意）" style="flex:1;padding:8px 10px;"></div>';
+  }
+  el.innerHTML='<div style="display:flex;align-items:flex-start;justify-content:center;padding:40px 20px;min-height:100vh;">'
+    +'<div style="background:#fff;border-radius:14px;padding:28px;width:100%;max-width:400px;border:1px solid #e8e8e8;">'
+    +'<div style="display:flex;justify-content:space-between;margin-bottom:6px;"><h2 style="font-size:16px;font-weight:500;">'+esc(F.name)+'</h2><span style="font-size:12px;color:#999;">2 / 2</span></div>'
+    +'<p style="font-size:12px;color:#999;margin-bottom:20px;">価値観ワーク・ストレングスファインダー</p>'
+    +'<div style="margin-bottom:18px;"><div style="font-size:12px;font-weight:500;color:#555;margin-bottom:8px;">価値観ワーク 上位5つ *</div>'+vi+'</div>'
+    +'<div style="margin-bottom:22px;"><div style="font-size:12px;font-weight:500;color:#555;margin-bottom:4px;">ストレングスファインダー <span style="font-weight:400;color:#999;">任意・後から追加可</span></div><div style="margin-top:8px;">'+si+'</div></div>'
+    +'<div style="display:flex;gap:10px;">'
+    +'<button id="a2b" style="flex:1;padding:10px;border:1px solid #d4d4d4;border-radius:8px;background:#fff;color:#555;">← 戻る</button>'
+    +'<button id="a2ok" style="flex:1;padding:10px;background:#1a1a1a;color:#fff;border:none;border-radius:8px;font-weight:500;">追加してページを開く</button>'
+    +'</div></div></div>';
+  var vis=el.querySelectorAll('.vi');for(var i=0;i<vis.length;i++){(function(inp){inp.oninput=function(e){F.v[+inp.dataset.i]=e.target.value;};})(vis[i]);}
+  var sis=el.querySelectorAll('.si');for(var i=0;i<sis.length;i++){(function(inp){inp.oninput=function(e){F.sf[+inp.dataset.i]=e.target.value;};})(sis[i]);}
+  G('a2b').onclick=function(){pg='add1';render();};
+  G('a2ok').onclick=function(){
+    var vals=F.v.filter(function(v){return v.trim();});
+    if(!vals.length){alert('価値観を1つ以上入力してください');return;}
+    var id='pc_'+Date.now();
+    cur={id:id,name:F.name.trim(),role:F.role,mbti:F.mbti,values:vals,sf:F.sf.filter(function(v){return v.trim();}),created:td(),updated:td(),
+      sheet:{positive_core:'',strengths:[],challenges:'',energizing_moments:'',expected_6m:'',expected_1y:'',current_role:'',required_skills:[],required_stance:'',notes:'',completion_rate:0,gaps:[],summary:''},
+      sessions:[],messages:[]};
+    msgs=[];list.push({id:id,name:cur.name,role:cur.role,pct:0,core:''});
+    ss('pc-idx',list);ss('pc-'+id,cur);pg='page';render();
+  };
+}
+
+function rPage(el){
+  if(!cur){pg='home';render();return;}
+  var sh=cur.sheet,pct=sh.completion_rate||0,has=pct>0;
+  var vc=cur.values.map(chip).join('');
+  var sc=cur.sf.map(function(v){return '<span style="display:inline-block;padding:3px 9px;background:#fff;border:1px dashed #d4d4d4;border-radius:20px;font-size:12px;color:#999;margin:2px 2px 0 0;">'+esc(v)+'</span>';}).join('');
+  var body='';
+  if(!has){
+    body='<div style="text-align:center;padding:50px 20px;border:1.5px dashed #d4d4d4;border-radius:14px;">'
+      +'<div style="font-size:32px;margin-bottom:12px;">📋</div>'
+      +'<div style="font-size:15px;font-weight:500;margin-bottom:6px;">シートはまだ作成されていません</div>'
+      +'<div style="font-size:13px;color:#999;margin-bottom:18px;">「入力・更新」から情報を入力してください</div>'
+      +'<button id="pg-inp2" style="padding:10px 24px;background:#1a1a1a;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:500;cursor:pointer;">📝 入力・更新 →</button>'
+      +'</div>';
+  }else{
+    body+='<div style="border-left:4px solid #333;padding:14px 18px;margin-bottom:24px;border-radius:0 8px 8px 0;background:#f7f7f5;">'
+      +'<div style="font-size:10px;font-weight:500;letter-spacing:2px;color:#999;margin-bottom:6px;">POSITIVE CORE</div>'
+      +'<div style="font-size:'+(sh.positive_core?'22px':'14px')+';font-weight:'+(sh.positive_core?500:400)+';color:'+(sh.positive_core?'#1a1a1a':'#bbb')+';line-height:1.4;">'+(sh.positive_core?esc(sh.positive_core):'まだ引き出し中...')+'</div></div>';
+    if(sh.summary)body+='<div style="font-size:13px;color:#555;line-height:1.8;padding:11px 14px;background:#f7f7f5;border-radius:8px;margin-bottom:20px;">'+esc(sh.summary)+'</div>';
+    body+='<div style="font-size:11px;font-weight:500;letter-spacing:1px;color:#999;margin-bottom:10px;">観察した姿</div>'
+      +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:20px;">'+pb('強み',sh.strengths.map(chip).join('')||'')+pb('ワクワクしている場面',sh.energizing_moments||'')+pb('課題・成長点',sh.challenges||'')+'</div>'
+      +'<div style="font-size:11px;font-weight:500;letter-spacing:1px;color:#999;margin-bottom:10px;">期待する姿</div>'
+      +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">'+pb('期待している姿（6ヶ月）',sh.expected_6m||'')+pb('期待している姿（1年）',sh.expected_1y||'')+'</div>'
+      +'<div style="margin-bottom:14px;">'+pb('目標達成に向けて今季担わせたい役割・仕事',sh.current_role||'',true,true)+'</div>'
+      +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:20px;">'+pb('求めるスキル',sh.required_skills.map(chip).join('')||'')+pb('求めるスタンス',sh.required_stance||'')+'</div>'
+      +(sh.notes?'<div style="margin-bottom:20px;">'+pb('備考・その他',sh.notes,true)+'</div>':'');
+    if(sh.gaps&&sh.gaps.length){
+      // 優先度でソート
+      var high=[],mid=[],low=[];
+      for(var i=0;i<sh.gaps.length;i++){
+        var g=sh.gaps[i];
+        if(g.indexOf('|HIGH')!==-1)high.push(g);
+        else if(g.indexOf('|MID')!==-1)mid.push(g);
+        else low.push(g);
+      }
+      var allGaps=high.concat(mid).concat(low);
+
+      body+='<div style="margin-bottom:20px;">'
+        +'<div style="font-size:11px;font-weight:500;letter-spacing:1px;color:#92400e;margin-bottom:6px;">⚡ 次の面談・会話で意識したいこと</div>'
+        +'<div style="display:flex;gap:14px;font-size:11px;color:#999;margin-bottom:12px;">'
+        +'<span>🔴 最優先</span><span>🟡 重要</span><span>⚪ 参考</span>'
+        +'</div>';
+
+      for(var i=0;i<allGaps.length;i++){
+        var g=allGaps[i];
+        var fullMatch=g.match(/^【(.+?)\|(.+?)】(.+)$/);
+        var simpleMatch=g.match(/^【(.+?)】(.+)$/);
+        var cat='',pri='',question='',dot='⚪',bg='#f9fafb',border='#e8e8e8',catColor='#555';
+        if(fullMatch){
+          cat=fullMatch[1];pri=fullMatch[2].trim();question=fullMatch[3].trim();
+          if(pri==='HIGH'){dot='🔴';bg='#fff5f5';border='#fca5a5';catColor='#c00';}
+          else if(pri==='MID'){dot='🟡';bg='#fffbeb';border='#fde68a';catColor='#92400e';}
+          else{dot='⚪';bg='#f9fafb';border='#e8e8e8';catColor='#555';}
+        }else if(simpleMatch){
+          cat=simpleMatch[1];question=simpleMatch[2].trim();
+        }else{
+          question=g;
+        }
+        body+='<div style="padding:12px 14px;background:'+bg+';border:1px solid '+border+';border-radius:8px;margin-bottom:8px;display:flex;gap:10px;align-items:flex-start;">'
+          +'<span style="font-size:14px;flex-shrink:0;margin-top:1px;">'+dot+'</span>'
+          +'<div>'
+          +(cat?'<div style="font-size:10px;font-weight:500;color:'+catColor+';margin-bottom:3px;letter-spacing:.5px;">'+esc(cat)+'</div>':'')
+          +'<div style="font-size:13px;color:#1a1a1a;line-height:1.7;">'+esc(question)+'</div>'
+          +'</div></div>';
+      }
+
+      body+='<div style="margin-top:10px;text-align:right;">'
+        +'<button id="go-input-from-gaps" style="font-size:12px;padding:6px 14px;border:1px solid #d4d4d4;border-radius:6px;background:#fff;color:#555;cursor:pointer;">📝 入力画面で追記する</button>'
+        +'</div>';
+      body+='</div>';
+    }
+  }
+  if(cur.sessions&&cur.sessions.length){
+    body+='<div style="border-top:1px solid #e8e8e8;padding-top:18px;margin-top:8px;">'
+      +'<div style="font-size:12px;font-weight:500;color:#999;margin-bottom:12px;">更新履歴</div>';
+    for(var i=0;i<cur.sessions.length;i++){var s=cur.sessions[i];body+='<div style="display:flex;gap:10px;margin-bottom:8px;"><span style="font-size:12px;color:#999;white-space:nowrap;">'+esc(s.date)+'</span><span style="font-size:13px;color:#555;">'+esc(s.summary)+'</span></div>';}
+    body+='</div>';
+  }
+  el.innerHTML=tbar(
+    gBtn('pg-back','← 一覧へ'),
+    '<div style="display:flex;gap:8px;">'+(has?'<button id="pg-copy" style="padding:7px 14px;border:1px solid #d4d4d4;border-radius:8px;background:#fff;color:#555;font-size:13px;">📋 Notionにコピー</button>':'')+oBtn('pg-inp','📝 入力・更新')+(has?sBtn('pg-chat','✦ AIと深掘り'):'')+'</div>'
+  )+'<div style="max-width:620px;margin:0 auto;">'
+    +'<div style="background:#f7f7f5;padding:28px 32px 20px;border-bottom:1px solid #e8e8e8;">'
+    +'<div style="display:flex;gap:8px;align-items:center;margin-bottom:4px;"><span style="font-size:12px;color:#999;">'+esc(cur.role)+'</span><span style="font-size:11px;padding:2px 7px;background:#fff;border:1px solid #d4d4d4;border-radius:4px;color:#999;">'+cur.mbti+'</span></div>'
+    +'<h1 style="font-size:28px;font-weight:500;margin-bottom:10px;">'+esc(cur.name)+'</h1>'
+    +'<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:14px;">'+vc+sc+'</div>'
+    +'<div style="display:flex;align-items:center;gap:8px;max-width:280px;"><div style="flex:1;height:4px;background:#e8e8e8;border-radius:2px;overflow:hidden;"><div style="height:100%;width:'+pct+'%;background:'+(pct>=70?'#15803d':'#1a1a1a')+';border-radius:2px;"></div></div><span style="font-size:12px;color:#999;">'+pct+'% 完成</span></div>'
+    +'</div>'
+    +'<div style="padding:24px 32px 50px;">'+body+'</div></div>';
+  G('pg-back').onclick=function(){var d=sg('pc-idx');list=d||[];pg='home';render();};
+  G('pg-inp').onclick=function(){initD();pg='input';render();};
+  if(G('pg-inp2'))G('pg-inp2').onclick=function(){initD();pg='input';render();};
+  if(G('go-input-from-gaps'))G('go-input-from-gaps').onclick=function(){initD();pg='input';render();};
+  if(G('pg-chat'))G('pg-chat').onclick=function(){doChat();};
+  if(G('pg-copy'))G('pg-copy').onclick=function(){copySheet();};
+}
+
+function copySheet(){
+  if(!cur)return;
+  var sh=cur.sheet,line='━━━━━━━━━━━━━━━━━━━━━━━━━━━';
+  var text=[line,cur.name+'　'+cur.role+'　'+cur.mbti,'価値観：'+(cur.values||[]).join(' / '),(cur.sf&&cur.sf.length?'SF：'+cur.sf.join(' / '):''),line,'','【POSITIVE CORE】',sh.positive_core||'（未記入）','','【強み】',(sh.strengths&&sh.strengths.length?sh.strengths.join(' / '):'（未記入）'),'','【ワクワクしている場面】',sh.energizing_moments||'（未記入）','','【課題・成長点】',sh.challenges||'（未記入）','','【期待している姿】','6ヶ月：'+(sh.expected_6m||'（未記入）'),'1年　：'+(sh.expected_1y||'（未記入）'),'','【今季担わせたい役割・仕事】',sh.current_role||'（未記入）','','【求めるスキル】',(sh.required_skills&&sh.required_skills.length?sh.required_skills.join(' / '):'（未記入）'),'','【求めるスタンス】',sh.required_stance||'（未記入）','',(sh.notes?'【備考・その他】':''),(sh.notes?sh.notes:''),'',line,'更新日：'+cur.updated].join('\n');
+  navigator.clipboard.writeText(text).then(function(){
+    var b=G('pg-copy');if(b){b.textContent='✅ コピー完了';b.style.color='#15803d';b.style.borderColor='#15803d';setTimeout(function(){if(G('pg-copy')){G('pg-copy').textContent='📋 Notionにコピー';G('pg-copy').style.color='#555';G('pg-copy').style.borderColor='#d4d4d4';}},2000);}
+  }).catch(function(){alert('コピーに失敗しました');});
+}
+
+function initD(){
+  var saved=sg('pc-draft');
+  if(saved&&saved._id===cur.id){D=saved;return;}
+  var sh=cur.sheet;
+  D={_id:cur.id,em:sh.energizing_moments||'',story:(sh.strengths||[]).join('、'),chal:sh.challenges||'',exp6m:sh.expected_6m||'',exp1y:sh.expected_1y||'',crole:sh.current_role||'',skills:(sh.required_skills||[]).join('、'),stance:sh.required_stance||'',notes:sh.notes||'',prev:'',memo:''};
+}
+
+function rInput(el){
+  var rows=[
+    ['fi-em','ワクワクしている場面',D.em,'生き生き働いている場面はどんな時ですか？',3],
+    ['fi-story','強みのエピソード',D.story,'強みを感じた具体的なシーンや言動は？',3],
+    ['fi-chal','課題・成長点',D.chal,'乗り越えてほしいこと・伸ばしてほしい部分は？',3],
+    ['fi-exp6m','期待している姿（6ヶ月）',D.exp6m,'6ヶ月後にどんな状態になってほしいですか？',3],
+    ['fi-exp1y','期待している姿（1年）',D.exp1y,'1年後にどんな状態になってほしいですか？',3],
+    ['fi-crole','今季担わせたい役割・仕事',D.crole,'今季任せたい役割・具体的な仕事は？',4],
+    ['fi-skills','習得してほしいスキル',D.skills,'身につけてほしい技術・スキルは？',3],
+    ['fi-stance','持ってほしいスタンス',D.stance,'仕事への姿勢・マインドで期待することは？',3],
+    ['fi-notes','備考・その他',D.notes||'','ストレスサイン・地雷パターン・フィードバックの受け取り方・理想の働き方など、上記に収まらない情報',4]
+  ];
+  var lf='';for(var i=0;i<rows.length;i++){var r=rows[i];lf+='<div style="margin-bottom:12px;"><label style="font-size:12px;font-weight:500;color:#555;display:block;margin-bottom:5px;">'+r[1]+'</label><textarea id="'+r[0]+'" rows="'+r[4]+'" placeholder="'+r[3]+'" style="width:100%;padding:8px 11px;border:1px solid #d4d4d4;border-radius:8px;background:#fff;color:#1a1a1a;line-height:1.5;resize:vertical;">'+esc(r[2])+'</textarea></div>';}
+  el.innerHTML=tbar(
+    gBtn('fi-back','← キャンセル'),
+    '<span style="font-size:14px;font-weight:500;">'+esc(cur.name)+' のシート入力</span>'+sBtn('fi-go','✦ AIに整理してもらう')
+  )+'<div style="padding:20px;"><div style="max-width:740px;margin:0 auto;display:grid;grid-template-columns:1fr 1fr;gap:20px;">'
+    +'<div><div style="font-size:11px;font-weight:500;letter-spacing:1px;color:#999;padding-bottom:8px;border-bottom:1px solid #e8e8e8;margin-bottom:14px;">観察・期待</div>'+lf+'</div>'
+    +'<div style="display:flex;flex-direction:column;gap:10px;">'
+    +'<div style="font-size:11px;font-weight:500;letter-spacing:1px;color:#999;padding-bottom:8px;border-bottom:1px solid #e8e8e8;">Notionからのコピペ・面談メモ</div>'
+    +'<div><div style="font-size:12px;font-weight:500;color:#555;margin-bottom:4px;">前回までのシート内容<span style="font-weight:400;color:#999;"> （Notionからコピペ・初回は空欄）</span></div><textarea id="fi-prev" rows="7" placeholder="前回のシート内容をNotionからコピペしてください&#10;初回の場合は空欄のままでOKです" style="width:100%;padding:8px 11px;border:1px solid #d4d4d4;border-radius:8px;background:#fff;color:#1a1a1a;line-height:1.6;resize:vertical;">'+esc(D.prev)+'</textarea></div>'
+    +'<div><div style="font-size:12px;font-weight:500;color:#555;margin-bottom:4px;">今回の面談メモ</div><textarea id="fi-memo" rows="7" placeholder="・〇〇の仕事が楽しいと話していた&#10;・患者への声かけが丁寧&#10;・リーダーを目指したい" style="width:100%;padding:8px 11px;border:1px solid #d4d4d4;border-radius:8px;background:#fff;color:#1a1a1a;line-height:1.6;resize:vertical;">'+esc(D.memo)+'</textarea></div>'
+    +'<div style="padding:10px 12px;border-radius:8px;background:#f7f7f5;border:1px solid #e8e8e8;font-size:12px;color:#555;line-height:1.8;">'
+    +'<b style="font-size:11px;color:#999;font-weight:500;">AIが参照する情報</b><br>'
+    +'MBTI：'+cur.mbti+'（'+MD[cur.mbti]+'）<br>'
+    +'価値観：'+esc((cur.values||[]).join('・')||'未設定')+'<br>'
+    +'SF：'+esc((cur.sf||[]).length?(cur.sf||[]).join('・'):'未実施')
+    +'</div></div></div></div>';
+  function upd(key,el2){el2.oninput=function(e){D[key]=e.target.value;D._id=cur.id;saveDraft();};}
+  upd('em',G('fi-em'));upd('story',G('fi-story'));upd('chal',G('fi-chal'));
+  upd('exp6m',G('fi-exp6m'));upd('exp1y',G('fi-exp1y'));upd('crole',G('fi-crole'));
+  upd('skills',G('fi-skills'));upd('stance',G('fi-stance'));upd('notes',G('fi-notes'));
+  upd('prev',G('fi-prev'));upd('memo',G('fi-memo'));
+  G('fi-back').onclick=function(){ss('pc-draft',null);pg='page';render();};
+  G('fi-go').onclick=function(){doOrg();};
+}
+
+function rBusy(el){
+  el.innerHTML='<div style="display:flex;align-items:center;justify-content:center;flex-direction:column;gap:18px;min-height:60vh;">'
+    +'<div style="width:36px;height:36px;border:3px solid #e8e8e8;border-top-color:#1a1a1a;border-radius:50%;animation:spin .8s linear infinite;"></div>'
+    +'<div id="busy-msg" style="font-size:15px;font-weight:500;">AIが整理しています...</div>'
+    +'<div style="font-size:13px;color:#999;text-align:center;line-height:1.8;">MBTI・価値観・面談メモを統合しています</div>'
+    +'<div id="busy-err" style="display:none;padding:14px 20px;background:#fff3f3;border:1px solid #e55;border-radius:8px;font-size:13px;color:#c00;max-width:420px;text-align:left;line-height:1.7;"></div>'
+    +'</div>';
+}
+
+function showBusyErr(msg){
+  var e=G('busy-err');
+  if(e){
+    e.style.display='block';
+    e.innerHTML=msg+'<br><br><button onclick="loadDraft();pg=\'input\';render();" style="padding:7px 18px;background:#1a1a1a;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;margin-top:4px;">← 入力画面に戻る（データ保持）</button>';
+  }
+}
+
+function updateBusyMsg(msg){
+  var el=G('busy-msg');if(el)el.textContent=msg;
+}
+
+function callWithRetry(p,remaining,attempt){
+  attempt=attempt||1;
+  var waitSec=attempt===1?0:attempt===2?10:20;
+  if(waitSec>0){
+    updateBusyMsg('サーバーが混雑しています。'+waitSec+'秒後に再試行します... ('+attempt+'/3)');
+    setTimeout(function(){doFetch(p,remaining,attempt);},waitSec*1000);
+  }else{
+    doFetch(p,remaining,attempt);
+  }
+}
+
+function doFetch(p,remaining,attempt){
+  updateBusyMsg('AIが整理しています... ('+(attempt)+'/3)');
+  fetch('https://api.anthropic.com/v1/messages',{
+    method:'POST',
+    headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+    body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:2000,messages:[{role:'user',content:p}]})
+  }).then(function(res){
+    if(res.status===529||res.status===503||res.status===500){
+      if(remaining>1){callWithRetry(p,remaining-1,attempt+1);}
+      else{showBusyErr('サーバーが混雑しています（529 Overloaded）。しばらく待ってから再試行してください。');}
+      return null;
+    }
+    if(!res.ok)return res.json().then(function(e){throw new Error('APIエラー('+res.status+'): '+(e.error&&e.error.message||JSON.stringify(e)));});
+    return res.json();
+  }).then(function(data){
+    if(!data)return;
+    try{
+      var raw=data.content&&data.content[0]?data.content[0].text||'{}':'{}';
+      // マークダウン除去
+      raw=raw.replace(/```json|```/g,'').trim();
+      // JSONオブジェクト部分だけ抽出
+      var m=raw.match(/\{[\s\S]*\}/);
+      if(m)raw=m[0];
+      // 制御文字を除去（タブ・改行は保持）
+      raw=raw.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g,' ');
+      // 末尾カンマを除去
+      raw=raw.replace(/,(\s*[}\]])/g,'$1');
+      var result=JSON.parse(raw);
+      Object.assign(cur.sheet,result);
+      if(!cur.sessions)cur.sessions=[];
+      cur.sessions.unshift({date:td(),summary:'第'+(cur.sessions.length+1)+'回 AI整理（完成度'+(result.completion_rate||0)+'%）'});
+      persist();ss('pc-draft',null);pg='page';render();
+    }catch(e){showBusyErr('解析エラー：'+e.message+'<br>もう一度お試しください。');}
+  }).catch(function(e){
+    if(remaining>1){callWithRetry(p,remaining-1,attempt+1);}
+    else{showBusyErr('通信エラー：'+e.message);}
+  });
+}
+
+function doOrg(){
+  needKey(function(){
+    saveDraft();
+    pg='busy';render();
+    var p='あなたは動物病院スタッフのポジティブコアシートを整理・更新するAIです。\n\nスタッフ：'+cur.name+'（'+cur.role+'）\nMBTI：'+cur.mbti+'（'+MD[cur.mbti]+'）\n価値観：'+(cur.values||[]).join('・')+'\nSF：'+((cur.sf||[]).join('・')||'未実施')+'\n\n【管理職の記入】\nワクワクしている場面：'+(D.em||'未記入')+'\n強みのエピソード：'+(D.story||'未記入')+'\n課題・成長点：'+(D.chal||'未記入')+'\n期待している姿（6ヶ月）：'+(D.exp6m||'未記入')+'\n期待している姿（1年）：'+(D.exp1y||'未記入')+'\n今季担わせたい役割・仕事：'+(D.crole||'未記入')+'\n求めるスキル：'+(D.skills||'未記入')+'\n求めるスタンス：'+(D.stance||'未記入')+'\n備考・その他：'+(D.notes||'未記入')+'\n\n【前回のシート内容】\n'+(D.prev||'（初回・なし）')+'\n\n【今回の面談メモ】\n'+(D.memo||'なし')+'\n\n【指示】\nMBTIと価値観を踏まえ全情報を統合してシートを整理してください。ポジティブコアは活力の源泉を一言で。\n\n【深掘り項目（gaps）の生成ルール】\n・未記入・内容が薄い・具体性が足りない項目をすべて列挙すること（数の制限なし）\n・各項目は「【カテゴリ|優先度】具体的な質問」の形式で記述すること\n・カテゴリは以下から選ぶ：ポジティブコア／強み／ワクワクする場面／課題／期待する姿／今季の役割／求めるスタンス\n・優先度は以下の基準で判定すること：\n  - HIGH：ポジティブコアの特定に直結する／シートの核心部分が未記入／MBTI・価値観との整合性を確認する必要がある\n  - MID：主要項目が薄い／具体的なエピソードが不足している\n  - LOW：あればより良い補足情報／すでに記入済みだがさらに深められる\n・質問はMBTIや価値観を踏まえた具体的・実践的な内容にすること\n・次の面談や日常会話の中で自然に聞けるような問いかけにすること\n・動物病院の現場（診察・処置・接客・チームワーク等）を意識した言葉を使うこと\n例：「【ポジティブコア|HIGH】仕事で一番達成感を感じた瞬間を1つ挙げるとしたらどんな場面ですか？」\n例：「【強み|MID】診察室での飼い主への説明場面で、特に印象に残っているエピソードはありますか？」\n例：「【課題|LOW】壁にぶつかった時にどう乗り越えてきたか、最近の例を教えてもらえますか？」\n\n必ずこのJSONのみ返答：\n{"positive_core":"","strengths":[],"challenges":"","energizing_moments":"","expected_6m":"","expected_1y":"","current_role":"","required_skills":[],"required_stance":"","notes":"","completion_rate":0,"gaps":[],"summary":""}';
+    callWithRetry(p,3);
+  });
+}
+
+function doChat(){
+  needKey(function(){
+    pg='chat';msgs=cur.messages||[];
+    if(!msgs.length){busy=true;render();chatReq(msgs,function(raw){var u=psu(raw);if(u)Object.assign(cur.sheet,u);msgs=[{role:'assistant',content:ctxt(raw)}];persist();busy=false;render();scrollChat();});}
+    else{render();scrollChat();}
+  });
+}
+
+function chatReq(ms,cb){
+  var sh=cur.sheet;
+  var sys='あなたは動物病院スタッフのポジティブコアを深掘りするAIファシリテーターです。\n対象：'+cur.name+'（'+cur.role+'）MBTI：'+cur.mbti+' 価値観：'+(cur.values||[]).join('・')+'\n現在：ポジティブコア「'+(sh.positive_core||'未確定')+'」完成度'+(sh.completion_rate||0)+'%\n不足項目：'+(sh.gaps&&sh.gaps.length?sh.gaps.join('、'):'なし')+'\nルール：質問は1回に1つ。'+cur.name+'さんを三人称で。具体的エピソードを引き出す。動物病院の現場を意識。日本語のみ。\n返答末尾に必ず：<su>{"positive_core":"","strengths":[],"challenges":"","energizing_moments":"","expected_6m":"","expected_1y":"","current_role":"","required_skills":[],"required_stance":"","completion_rate":0,"gaps":[]}</su>';
+  var history=[{role:'user',content:'セッションを開始してください。最初の質問をお願いします。'}];
+  for(var i=0;i<ms.length;i++)history.push({role:ms[i].role,content:ms[i].content});
+  fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:700,system:sys,messages:history})}).then(function(res){return res.json();}).then(function(data){cb(data.content&&data.content[0]?data.content[0].text||'エラー':'エラー');}).catch(function(e){cb('通信エラー: '+e.message);});
+}
+function psu(t){var m=t.match(/<su>([\s\S]*?)<\/su>/);if(!m)return null;try{return JSON.parse(m[1]);}catch(e){return null;}}
+function ctxt(t){return t.replace(/<su>[\s\S]*?<\/su>/g,'').trim();}
+function scrollChat(){setTimeout(function(){var cb=G('cb');if(cb)cb.scrollIntoView({behavior:'smooth'});},60);}
+
+function rChat(el){
+  var sh=cur&&cur.sheet,pct=sh&&sh.completion_rate||0;
+  var mh='';
+  for(var i=0;i<msgs.length;i++){
+    var m=msgs[i];
+    if(m.role==='assistant')mh+='<div style="display:flex;margin-bottom:12px;"><div style="width:24px;height:24px;border-radius:50%;background:#1a1a1a;display:flex;align-items:center;justify-content:center;font-size:9px;color:#fff;font-weight:500;flex-shrink:0;margin-right:7px;margin-top:2px;">AI</div><div style="max-width:80%;padding:10px 14px;border-radius:12px 12px 12px 4px;background:#fff;color:#1a1a1a;font-size:14px;line-height:1.7;white-space:pre-wrap;border:1px solid #e8e8e8;">'+esc(m.content)+'</div></div>';
+    else mh+='<div style="display:flex;justify-content:flex-end;margin-bottom:12px;"><div style="max-width:80%;padding:10px 14px;border-radius:12px 12px 4px 12px;background:#1a1a1a;color:#fff;font-size:14px;line-height:1.7;white-space:pre-wrap;">'+esc(m.content)+'</div></div>';
+  }
+  if(busy)mh+='<div style="display:flex;align-items:center;gap:7px;"><div style="width:24px;height:24px;border-radius:50%;background:#1a1a1a;display:flex;align-items:center;justify-content:center;font-size:9px;color:#fff;font-weight:500;">AI</div><div style="padding:10px 14px;border-radius:12px;background:#fff;border:1px solid #e8e8e8;display:flex;gap:4px;"><div style="width:5px;height:5px;border-radius:50%;background:#999;animation:pulse 1.2s 0ms ease-in-out infinite;"></div><div style="width:5px;height:5px;border-radius:50%;background:#999;animation:pulse 1.2s 200ms ease-in-out infinite;"></div><div style="width:5px;height:5px;border-radius:50%;background:#999;animation:pulse 1.2s 400ms ease-in-out infinite;"></div></div></div>';
+  var mini='<div style="font-size:10px;letter-spacing:1.5px;color:#999;font-weight:500;margin-bottom:10px;">シートプレビュー</div>';
+  mini+='<div style="padding:9px;border-radius:8px;background:#fff;border:'+(sh&&sh.positive_core?'1.5px solid #555':'1px solid #e8e8e8')+';margin-bottom:8px;"><div style="font-size:9px;letter-spacing:1px;font-weight:500;color:#999;margin-bottom:3px;">POSITIVE CORE</div><div style="font-size:12px;font-weight:'+(sh&&sh.positive_core?500:400)+';color:'+(sh&&sh.positive_core?'#1a1a1a':'#bbb')+';line-height:1.5;">'+esc(sh&&sh.positive_core?sh.positive_core:'引き出し中...')+'</div></div>';
+  var prows=[['強み',sh&&sh.strengths?sh.strengths.join(' / '):''],['ワクワクする場面',sh&&sh.energizing_moments||''],['課題',sh&&sh.challenges||''],['期待（6ヶ月）',sh&&sh.expected_6m||''],['期待（1年）',sh&&sh.expected_1y||''],['今季の役割',sh&&sh.current_role||'']];
+  for(var i=0;i<prows.length;i++){var pr=prows[i];mini+='<div style="padding:7px 9px;border-radius:7px;background:#fff;border:1px solid #e8e8e8;margin-bottom:6px;"><div style="font-size:9px;font-weight:500;color:#999;margin-bottom:2px;">'+pr[0]+'</div><div style="font-size:11px;color:'+(pr[1]?'#1a1a1a':'#bbb')+';line-height:1.5;">'+esc(pr[1]||'—')+'</div></div>';}
+  el.innerHTML=tbar(
+    '<div style="display:flex;align-items:center;gap:10px;">'+gBtn('ch-back','← ページへ')+'<span style="color:#e8e8e8;">|</span><span style="font-size:13px;font-weight:500;">'+esc(cur&&cur.name||'')+'</span></div>',
+    '<div style="display:flex;align-items:center;gap:8px;"><div style="width:70px;height:3px;background:#e8e8e8;border-radius:2px;overflow:hidden;"><div style="height:100%;width:'+pct+'%;background:'+(pct>=70?'#15803d':'#1a1a1a')+';border-radius:2px;"></div></div><span style="font-size:11px;color:#999;">'+pct+'%</span></div>'
+  )+'<div style="display:flex;height:calc(100vh - 48px);">'
+    +'<div style="flex:1;display:flex;flex-direction:column;min-width:0;">'
+    +'<div style="flex:1;overflow-y:auto;padding:18px;">'+mh+'<div id="cb"></div></div>'
+    +'<div style="padding:12px 16px;border-top:1px solid #e8e8e8;background:#fff;display:flex;gap:8px;">'
+    +'<input id="ch-inp" placeholder="'+(busy?'AIが考え中...':'返答を入力...')+'" '+(busy?'disabled':'')+' style="flex:1;padding:9px 12px;border:1px solid #d4d4d4;border-radius:8px;font-size:14px;color:#1a1a1a;background:#fff;">'
+    +'<button id="ch-send" style="padding:9px 16px;background:#1a1a1a;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:500;opacity:'+(busy?.5:1)+';cursor:pointer;">送信</button>'
+    +'</div></div>'
+    +'<div style="width:190px;flex-shrink:0;border-left:1px solid #e8e8e8;background:#f7f7f5;overflow-y:auto;padding:12px;">'+mini+'</div>'
+    +'</div>';
+  scrollChat();
+  G('ch-back').onclick=function(){
+    if(msgs.length>1&&cur){
+      if(!cur.sessions)cur.sessions=[];
+      var q=msgs.filter(function(m){return m.role==='user';}).length;
+      cur.sessions.unshift({date:td(),summary:'第'+(cur.sessions.length+1)+'回 深掘り（'+q+'問答・'+pct+'%）'});
+      msgs=[];persist();
+    }
+    pg='page';render();
+  };
+  var inp=G('ch-inp'),snd=G('ch-send');
+  if(inp&&!busy){
+    inp.focus();
+    inp.onkeydown=function(e){if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();send(inp.value);}};
+    snd.onclick=function(){send(inp.value);};
+  }
+}
+
+function send(val){
+  if(!val||!val.trim()||busy)return;
+  msgs=msgs.concat([{role:'user',content:val.trim()}]);
+  busy=true;render();scrollChat();
+  chatReq(msgs,function(raw){var u=psu(raw);if(u)Object.assign(cur.sheet,u);msgs=msgs.concat([{role:'assistant',content:ctxt(raw)}]);persist();busy=false;render();scrollChat();});
+}
+
+try{var savedList=sg('pc-idx');if(savedList&&savedList.length)list=savedList;}catch(e){console.error('Init error:',e);}
+try{render();}catch(e){document.getElementById('app').innerHTML='<div style="padding:30px;"><b style="color:#c00;">起動エラー</b><br><div style="margin-top:8px;font-size:13px;color:#555;">'+e.message+'</div><br><button onclick="localStorage.removeItem(\'pc-draft\');location.reload();" style="padding:8px 16px;background:#1a1a1a;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;">ドラフトをリセットして再起動</button></div>';}
+</script>
+</body>
+</html>
