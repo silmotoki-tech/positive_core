@@ -21,6 +21,39 @@ button{cursor:pointer;}
 <body>
 <div id="app"><div style="padding:20px;color:#999;">読み込み中...</div></div>
 <script>
+// パスワード認証
+function checkAuth(){
+  if(sessionStorage.getItem('pc-auth')==='ok')return true;
+  return false;
+}
+function showLogin(){
+  var el=document.getElementById('app');
+  el.innerHTML='<div style="display:flex;align-items:center;justify-content:center;min-height:100vh;">'
+    +'<div style="background:#fff;border-radius:14px;padding:40px;width:90%;max-width:360px;border:1px solid #e8e8e8;text-align:center;">'
+    +'<div style="font-size:11px;letter-spacing:2px;color:#999;font-weight:500;margin-bottom:16px;">POSITIVE CORE</div>'
+    +'<h1 style="font-size:20px;font-weight:500;margin-bottom:8px;">スタッフ育成シート</h1>'
+    +'<p style="font-size:13px;color:#999;margin-bottom:28px;">パスワードを入力してください</p>'
+    +'<input id="pw-inp" type="password" placeholder="パスワード" style="width:100%;padding:11px 14px;border:1px solid #d4d4d4;border-radius:8px;font-size:16px;text-align:center;letter-spacing:4px;margin-bottom:10px;">'
+    +'<div id="pw-err" style="color:#c00;font-size:12px;margin-bottom:10px;min-height:16px;"></div>'
+    +'<button id="pw-btn" style="width:100%;padding:12px;background:#1a1a1a;color:#fff;border:none;border-radius:8px;font-size:15px;font-weight:500;cursor:pointer;">入力</button>'
+    +'</div></div>';
+  var inp=document.getElementById('pw-inp');
+  var btn=document.getElementById('pw-btn');
+  var err=document.getElementById('pw-err');
+  function tryLogin(){
+    if(inp.value==='NAHP'){
+      sessionStorage.setItem('pc-auth','ok');
+      init();
+    }else{
+      err.textContent='パスワードが違います';
+      inp.value='';inp.focus();
+    }
+  }
+  inp.onkeydown=function(e){if(e.key==='Enter')tryLogin();};
+  btn.onclick=tryLogin;
+  setTimeout(function(){inp.focus();},50);
+}
+function init(){
 var MBTIS=['INTJ','INTP','ENTJ','ENTP','INFJ','INFP','ENFJ','ENFP','ISTJ','ISFJ','ESTJ','ESFJ','ISTP','ISFP','ESTP','ESFP'];
 var MD={INTJ:'戦略家・独立思考',INTP:'論理学者・分析的',ENTJ:'指揮官・目標志向',ENTP:'討論者・革新的',INFJ:'提唱者・共感力',INFP:'仲介者・価値観重視',ENFJ:'主人公・育成志向',ENFP:'広報運動家・情熱的',ISTJ:'管理者・責任感',ISFJ:'擁護者・献身的',ESTJ:'幹部・組織力',ESFJ:'領事官・協調性',ISTP:'巨匠・実践的',ISFP:'冒険家・感受性',ESTP:'起業家・行動力',ESFP:'エンターテイナー・社交的'};
 var ROLES=['獣医師','動物看護師','受付・事務','トリマー','その他'];
@@ -506,6 +539,10 @@ function send(val){
 
 try{var savedList=sg('pc-idx');if(savedList&&savedList.length)list=savedList;}catch(e){console.error('Init error:',e);}
 try{render();}catch(e){document.getElementById('app').innerHTML='<div style="padding:30px;"><b style="color:#c00;">起動エラー</b><br><div style="margin-top:8px;font-size:13px;color:#555;">'+e.message+'</div><br><button onclick="localStorage.removeItem(\'pc-draft\');location.reload();" style="padding:8px 16px;background:#1a1a1a;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;">ドラフトをリセットして再起動</button></div>';}
+}
+
+// 起動時に認証チェック
+if(checkAuth()){init();}else{showLogin();}
 </script>
 </body>
 </html>
